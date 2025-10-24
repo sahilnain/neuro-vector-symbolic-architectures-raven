@@ -278,7 +278,7 @@ def main():
 
     # Training hyperparameters
     arg_parser.add_argument("--epochs", type=int, default=100, help="the number of training epochs")
-    arg_parser.add_argument("--batch-size", type=int, default=16, help="size of batch")
+    arg_parser.add_argument("--batch-size", type=int, default=2, help="size of batch")
     arg_parser.add_argument("--device", type=int, default=0, help="device index for GPU; if GPU unavailable, leave it as default")
     arg_parser.add_argument("--lr", type=float, default=0.95e-4, help="learning rate")
     arg_parser.add_argument("--weight-decay", type=float, default=5e-4, help="weight decay of optimizer, same as l2 reg")

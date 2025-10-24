@@ -64,6 +64,7 @@ class Dataset(t.utils.data.Dataset):
             rule_ret=[]
 
             for i in range(NCONST[self.config]):  
+                # print(data_path.replace(".npz", "_rule_comp{:}.npz".format(i)))
                 rule_gt = np.load(data_path.replace(".npz", "_rule_comp{:}.npz".format(i)))
                 pos_num_rule = t.tensor(rule_gt["pos_num_rule"], dtype=t.long)
                 type_rule = t.tensor(rule_gt["type_rule"], dtype=t.long)

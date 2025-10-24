@@ -43,6 +43,10 @@ Make sure to activate the environment before running any code. The installation 
 
 Download the `.npz` and `.xml` files of the RAVEN dataset [here](http://wellyzhang.github.io/project/raven.html#dataset) as presented in „RAVEN: A Dataset for Relational and Analogical Visual rEasoNing„ by Zhang et al. (2019). Let `DATAPATH/` be the path to the saved data.
 
+## Download saved checkpoint
+
+Download the saved checkpoint from the [here](https://drive.google.com/drive/folders/1jpdGDSnl-2Sle5gOzmnCL-_obK7qTnlz?usp=drive_link)
+
 ## Prepare Data
 
 Run the rule preprocessing script which you can get [here](https://github.com/WellyZhang/PrAE/tree/main/src/auxiliary)
