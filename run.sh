@@ -1,48 +1,63 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
 
+# ---- experiment config (edit these) ----
 EXPNR=000
-SAVEPATH="/dccstor/saentis/log/03_rpm/"
-DATAPATH="/dccstor/saentis/data/RAVEN/RAVEN-10000"
-DATAPATHIRAVEN="/dccstor/saentis/data/I-RAVEN/"
-EXPNAME="nvsa_test2"
-EXPPATH="${SAVEPATH}/${EXPNAME}/"
+EXPNAME="nvsa_local"
+SAVEPATH="$HOME/nvsa_logs"               
+DATAPATH="$HOME/Thesis/Datasets/RAVEN-10000"
+DATAPATHIRAVEN=""       
 SEED=1234
 RUN=0
+EXPPATH="${SAVEPATH}/${EXPNAME}/"
+CHKPOINTPATH="$HOME/Thesis/neuro-vector-symbolic-architectures-raven/Checkpoint_saved/ckpt"
 
-# NVSA specific backend
-source /opt/share/anaconda3-2019.03/x86_64/bin/activate py37_torch111
+# ---- conda activate in non-interactive shell ----
+# if command -v conda >/dev/null 2>&1; then
+#   eval "$(conda shell.bash hook)"
+#   conda activate myNVSAenv
+# else
+#   echo "conda not found on PATH"; exit 1
+# fi
+
+mkdir -p "$EXPPATH"
+
+run_job () {
+  local NAME="$1"; shift
+  echo "=== Running: $NAME ==="
+  python raven/main_nvsa_marg.py "$@" \
+    --exp_dir "$EXPPATH" \
+    --dataset "$DATAPATH" \
+    --dataset-i-raven "$DATAPATHIRAVEN" \
+    --seed "$SEED" \
+    --run "$RUN" \
+    --resume "$CHKPOINTPATH"
+}
 
 # Center
-jbsub -cores 8+1 -mem 32g -require a100 -name "j${EXPNR}_${RUN}" -queue x86_6h \
-python raven/main_nvsa_marg.py --mode train --config center_single --epochs 50 --s 7 --trainable-s \
- --exp_dir $EXPPATH --dataset $DATAPATH --dataset-i-raven $DATAPATHIRAVEN  --seed $SEED --run $RUN
+run_job center_single \
+  --mode test --config center_single --epochs 2 --s 7 --trainable-s
 
-# 2x2
-jbsub -cores 8+1 -mem 32g -require a100 -name "j${EXPNR}_${RUN}" -queue x86_24h \
-python raven/main_nvsa_marg.py --mode train --config distribute_four --epochs 150 --s 6 --trainable-s \
---exp_dir $EXPPATH --dataset $DATAPATH --dataset-i-raven $DATAPATHIRAVEN  --seed $SEED --run $RUN
+# # 2x2
+# run_job distribute_four \
+#   --mode train --config distribute_four --epochs 150 --s 6 --trainable-s
 
-# 3x3
-jbsub -cores 8+1 -mem 32g -require a100 -name "j${EXPNR}_${RUN}" -queue x86_24h \
-python raven/main_nvsa_marg.py --mode train --config distribute_nine --epochs 150 --s 2 --trainable-s --batch-size 8 \
---exp_dir $EXPPATH --dataset $DATAPATH --dataset-i-raven $DATAPATHIRAVEN  --seed $SEED --run $RUN
+# # 3x3 (uses smaller batch in the original script)
+# run_job distribute_nine \
+#   --mode train --config distribute_nine --epochs 150 --s 2 --trainable-s --batch-size 8
 
-# Left-right
-jbsub -cores 8+1 -mem 32g -require a100 -name "j${EXPNR}_${RUN}" -queue x86_12h \
-python raven/main_nvsa_marg.py --mode train --config left_center_single_right_center_single --epochs 100 --s 5 --trainable-s \
---exp_dir $EXPPATH --dataset $DATAPATH --dataset-i-raven $DATAPATHIRAVEN  --seed $SEED --run $RUN
+# # Left-right
+# run_job lr \
+#   --mode train --config left_center_single_right_center_single --epochs 100 --s 5 --trainable-s
 
-# Up-down
-jbsub -cores 8+1 -mem 32g -require a100 -name "j${EXPNR}_${RUN}" -queue x86_12h \
-python raven/main_nvsa_marg.py --mode train --config up_center_single_down_center_single --epochs 100 --s 5 --trainable-s \
---exp_dir $EXPPATH --dataset $DATAPATH --dataset-i-raven $DATAPATHIRAVEN  --seed $SEED --run $RUN
+# # Up-down
+# run_job ud \
+#   --mode train --config up_center_single_down_center_single --epochs 100 --s 5 --trainable-s
 
-# Out-in center
-jbsub -cores 8+1 -mem 32g -require a100 -name "j${EXPNR}_${RUN}" -queue x86_12h \
-python raven/main_nvsa_marg.py --mode train --config in_center_single_out_center_single --epochs 100 --s 5 --trainable-s \
---exp_dir $EXPPATH --dataset $DATAPATH --dataset-i-raven $DATAPATHIRAVEN  --seed $SEED --run $RUN
+# # Out-in center
+# run_job inout_center \
+#   --mode train --config in_center_single_out_center_single --epochs 100 --s 5 --trainable-s
 
-# Out-in grid
-jbsub -cores 8+1 -mem 32g -require a100 -name "j${EXPNR}_${RUN}" -queue x86_12h \
-python raven/main_nvsa_marg.py --mode train --config in_center_single_out_center_single --epochs 100 --s 5 --trainable-s \
---exp_dir $EXPPATH --dataset $DATAPATH --dataset-i-raven $DATAPATHIRAVEN  --seed $SEED --run $RUN
+# # Out-in grid (same config as above per repo script)
+# run_job inout_grid \
+#   --mode train --config in_center_single_out_center_single --epochs 100 --s 5 --trainable-s
