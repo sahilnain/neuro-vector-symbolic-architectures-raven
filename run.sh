@@ -22,6 +22,18 @@ CHKPOINTPATH="$HOME/Thesis/neuro-vector-symbolic-architectures-raven/Checkpoint_
 
 mkdir -p "$EXPPATH"
 
+# run_job () {
+#   local NAME="$1"; shift
+#   echo "=== Running: $NAME ==="
+#   python -m cProfile -s cumtime raven/main_nvsa_marg.py "$@" \
+#     --exp_dir "$EXPPATH" \
+#     --dataset "$DATAPATH" \
+#     --dataset-i-raven "$DATAPATHIRAVEN" \
+#     --seed "$SEED" \
+#     --run "$RUN" \
+#     --resume "$CHKPOINTPATH" >> nvsa_profile_cpu.txt
+# }
+
 run_job () {
   local NAME="$1"; shift
   echo "=== Running: $NAME ==="
@@ -36,7 +48,7 @@ run_job () {
 
 # Center
 run_job center_single \
-  --mode test --config center_single --epochs 2 --s 7 --trainable-s
+  --mode test --config center_single --epochs 50 --s 7 --trainable-s
 
 # # 2x2
 # run_job distribute_four \

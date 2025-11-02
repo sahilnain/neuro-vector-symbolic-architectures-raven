@@ -26,8 +26,29 @@ from nvsa.perception.resnet import resnet18
 from nvsa.perception.metrics import  hd_mult_frontend, generate_IM
 from nvsa.reasoning.vsa_block_utils import block_discrete_codebook, block_continuous_codebook
 
+# imports for visualization tools
+from torchviz import make_dot
+from torchview import draw_graph
 
-def generate_nvsa_codebooks(args,rng): 
+# Profiling tools
+import cProfile, pstats, io
+from contextlib import contextmanager
+
+@contextmanager
+def profile_to_file(path):
+    pr = cProfile.Profile()
+    pr.enable()
+    try:
+        yield
+    finally:
+        pr.disable()
+        with open(path, "w") as f:
+            ps = pstats.Stats(pr, stream=f).strip_dirs().sort_stats("cumtime")
+            ps.print_stats()
+        print(f"[cProfile] saved: {path}")
+
+
+def generate_nvsa_codebooks(args,rng,device): 
     '''
     Generate the codebooks for NVSA frontend and backend. 
     The codebook can also be loaded if it is stored under args.resume/
@@ -38,8 +59,12 @@ def generate_nvsa_codebooks(args,rng):
         data= torch.load(imfilename, map_location='cpu')
         perception_cb = data["perception_cb"]
         perception_imdict = data["perception_imdict"]
-        backend_cb_cont = data['backend_cb_cont'].to(args.device)
-        backend_cb_discrete = data['backend_cb_discrete'].to(args.device)
+        if(device == torch.device("cpu")):
+            backend_cb_cont = data['backend_cb_cont']
+            backend_cb_discrete = data['backend_cb_discrete']
+        else:
+            backend_cb_cont = data['backend_cb_cont'].to(args.device)
+            backend_cb_discrete = data['backend_cb_discrete'].to(args.device)
     else: 
         print("Generate new NVSA codebooks")
         backend_cb_cont, _ = block_continuous_codebook(device=args.device,scene_dim=12, d=args.nvsa_backend_d,k=args.nvsa_backend_k, rng=rng)  
@@ -203,21 +228,71 @@ def test(args, env, device, perception_cb, writer = None, dset="RAVEN"):
         xe_loss_avg = AverageMeter('XE Loss', ':.3f')
         acc_avg = AverageMeter('Acccuracy', ':.3f')
         for counter, (images, targets, all_action_rule) in enumerate(tqdm(test_loader)):
+
+            # if(counter >= 1):
+            #     break
+
             images, targets = images.to(device), targets.to(device)
             [B,N,_, H,W] = images.shape
 
             # Pass images through ResNet18
+            # with profile_to_file(f"profile_resnet_batch.txt"):
             model_output = model(images.view(B*N,1,H,W))
+
+            # torch.onnx.export(
+            #     model,                  # model to export
+            #     (images.view(B*N,1,H,W),),        # inputs of the model,
+            #     "ResNet18.onnx",        # filename of the ONNX model
+            #     input_names=["input"],  # Rename inputs for the ONNX model
+            #     dynamo=True,             # True or False to select the exporter to use
+            #     opset_version=12, do_constant_folding=True
+            # )
+
+            # dot = make_dot(model_output, params=dict(model.named_parameters()))
+            # dot.render("net2vis_graph", format="png")
+
+            # Can control the depth with this
+            # graph = draw_graph(
+            #     model,
+            #     input_size=(1, 1, H, W),   # match your model input
+            #     depth=1,                   # <— lower = more abstract (1 or 2 is great for slides)
+            #     expand_nested=False,       # don’t explode residual blocks
+            #     device=device
+            # )
+            # graph.visual_graph.graph_attr.update({
+            #     "rankdir": "LR",   # left->right layout for slides
+            #     "fontsize": "10",
+            # })
+            # graph.visual_graph.render("resnet_module_graph", format="pdf", cleanup=False)
+
             # Compare query with codebook and compute probabilities
+            # with profile_to_file(f"profile_vsa_frontend.txt"):
             marg_prob = metric_fc(model_output,B,N)
+            # torch.onnx.export(
+            #     metric_fc,                  # model to export
+            #     (model_output,B,N,),        # inputs of the model,
+            #     "NVSA_frontend.onnx",        # filename of the ONNX model
+            #     input_names=["input"],  # Rename inputs for the ONNX model
+            #     dynamo=True,             # True or False to select the exporter to use
+            #     opset_version=12, do_constant_folding=True
+            # )
+
             # Infer the scene probabilities
+            # with profile_to_file(f"profile_vsa_backend_prepare.txt"):
             scene_prob, scene_logprob = env.prepare(marg_prob)
+
             # Rule probability computation 
+            # with profile_to_file(f"profile_vsa_backend_action.txt"):
             action, action_logprob, all_action_prob = env.action(scene_logprob, sample=False)
+
             # Rule execution
+            # with profile_to_file(f"profile_vsa_backend_step.txt"):
             pred = env.step(scene_prob, action)
+
             # Compute loss (JSD) and scores
+            # with profile_to_file(f"profile_vsa_backend_loss.txt"):
             loss, scores, xe_loss_item = env.loss(action[0], action_logprob, pred, scene_prob, targets, criteria.JSD)
+
             xe_loss_avg.update(loss.item(),images.size(0))
             acc = criteria.calculate_acc(scores, targets)
             acc_avg.update(acc.item(),images.size(0))
@@ -236,7 +311,7 @@ def test(args, env, device, perception_cb, writer = None, dset="RAVEN"):
     # Load all checkpoint 
     model_path = os.path.join(args.resume,"model_best.pth.tar")
     if os.path.isfile(model_path):
-        checkpoint = torch.load(model_path)
+        checkpoint = torch.load(model_path, map_location=device)
         print("=> loaded checkpoint '{}' with acc {:.3f}".format(model_path,checkpoint["best_acc"]))
     else:
         raise ValueError("No checkpoint found at {:}".format(model_path)) 
@@ -256,8 +331,8 @@ def test(args, env, device, perception_cb, writer = None, dset="RAVEN"):
     test_loader = DataLoader(test_set, batch_size=args.batch_size, num_workers=args.num_workers)
 
     print("Evaluating on {}".format(args.config))
-    with torch.no_grad():
-        test_epoch()
+    # with torch.no_grad():
+    test_epoch()
     return writer
 
 def main(): 
@@ -309,9 +384,13 @@ def main():
     arg_parser.add_argument('--executor-cos2pmf-act', type=str, default="Identity", help="Function for mapping similarities to probability")
 
 
+    torch.backends.cudnn.enabled = True
+    torch.cuda.is_available = lambda : True
+
     args = arg_parser.parse_args()
     args.cuda = torch.cuda.is_available()
     device = torch.device("cuda:{}".format(args.device) if args.cuda else "cpu")
+    print(device)
 
     # Number of positions depends on the constellation
     args.num_pos = NUMPOS[args.config]
@@ -320,7 +399,7 @@ def main():
     rng = np.random.default_rng(seed=args.seed)
 
     # Load or define new codebooks
-    perception_cb, perception_imdict, backend_cb_cont, backend_cb_discrete = generate_nvsa_codebooks(args,rng)
+    perception_cb, perception_imdict, backend_cb_cont, backend_cb_discrete = generate_nvsa_codebooks(args,rng, device)
 
     # backend for training/testing
     env = env_nvsa_ext.get_env(args.config,device, vsa_cb_discrete=backend_cb_discrete, vsa_cb_cont = backend_cb_cont,
