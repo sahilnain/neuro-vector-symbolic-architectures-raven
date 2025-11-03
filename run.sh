@@ -8,7 +8,7 @@ SAVEPATH="$HOME/nvsa_logs"
 DATAPATH="$HOME/Thesis/Datasets/RAVEN-10000"
 DATAPATHIRAVEN=""       
 SEED=1234
-RUN=0
+RUN=0 
 EXPPATH="${SAVEPATH}/${EXPNAME}/"
 CHKPOINTPATH="$HOME/Thesis/neuro-vector-symbolic-architectures-raven/Checkpoint_saved/ckpt"
 
@@ -48,7 +48,7 @@ run_job () {
 
 # Center
 run_job center_single \
-  --mode test --config center_single --epochs 50 --s 7 --trainable-s
+  --mode test --config center_single --epochs 10 --s 7 --trainable-s
 
 # # 2x2
 # run_job distribute_four \

@@ -26,13 +26,10 @@ from nvsa.perception.resnet import resnet18
 from nvsa.perception.metrics import  hd_mult_frontend, generate_IM
 from nvsa.reasoning.vsa_block_utils import block_discrete_codebook, block_continuous_codebook
 
-# imports for visualization tools
-from torchviz import make_dot
-from torchview import draw_graph
-
 # Profiling tools
 import cProfile, pstats, io
 from contextlib import contextmanager
+import onnxruntime as ort
 
 @contextmanager
 def profile_to_file(path):
@@ -229,73 +226,62 @@ def test(args, env, device, perception_cb, writer = None, dset="RAVEN"):
         acc_avg = AverageMeter('Acccuracy', ':.3f')
         for counter, (images, targets, all_action_rule) in enumerate(tqdm(test_loader)):
 
-            # if(counter >= 1):
-            #     break
+            if(counter >= 1):
+                break
 
             images, targets = images.to(device), targets.to(device)
             [B,N,_, H,W] = images.shape
 
             # Pass images through ResNet18
-            # with profile_to_file(f"profile_resnet_batch.txt"):
             model_output = model(images.view(B*N,1,H,W))
+
+            # Run inference
+            # input_onnx = images.view(B*N,1,H,W).detach().cpu().numpy().astype(np.float32)
+            # outputs = session.run(None, {"input": input_onnx})
 
             # torch.onnx.export(
             #     model,                  # model to export
-            #     (images.view(B*N,1,H,W),),        # inputs of the model,
+            #     images.view(B*N,1,H,W),        # inputs of the model,
             #     "ResNet18.onnx",        # filename of the ONNX model
             #     input_names=["input"],  # Rename inputs for the ONNX model
             #     dynamo=True,             # True or False to select the exporter to use
-            #     opset_version=12, do_constant_folding=True
+            #     do_constant_folding=False,
+            #     profile=False,
+            #     optimize=True
             # )
-
-            # dot = make_dot(model_output, params=dict(model.named_parameters()))
-            # dot.render("net2vis_graph", format="png")
-
-            # Can control the depth with this
-            # graph = draw_graph(
-            #     model,
-            #     input_size=(1, 1, H, W),   # match your model input
-            #     depth=1,                   # <— lower = more abstract (1 or 2 is great for slides)
-            #     expand_nested=False,       # don’t explode residual blocks
-            #     device=device
-            # )
-            # graph.visual_graph.graph_attr.update({
-            #     "rankdir": "LR",   # left->right layout for slides
-            #     "fontsize": "10",
-            # })
-            # graph.visual_graph.render("resnet_module_graph", format="pdf", cleanup=False)
 
             # Compare query with codebook and compute probabilities
-            # with profile_to_file(f"profile_vsa_frontend.txt"):
             marg_prob = metric_fc(model_output,B,N)
+
             # torch.onnx.export(
             #     metric_fc,                  # model to export
             #     (model_output,B,N,),        # inputs of the model,
             #     "NVSA_frontend.onnx",        # filename of the ONNX model
             #     input_names=["input"],  # Rename inputs for the ONNX model
             #     dynamo=True,             # True or False to select the exporter to use
-            #     opset_version=12, do_constant_folding=True
+            #     do_constant_folding=False,
+            #     profile=False,
+            #     optimize=True
             # )
 
             # Infer the scene probabilities
-            # with profile_to_file(f"profile_vsa_backend_prepare.txt"):
             scene_prob, scene_logprob = env.prepare(marg_prob)
 
             # Rule probability computation 
-            # with profile_to_file(f"profile_vsa_backend_action.txt"):
             action, action_logprob, all_action_prob = env.action(scene_logprob, sample=False)
 
             # Rule execution
-            # with profile_to_file(f"profile_vsa_backend_step.txt"):
             pred = env.step(scene_prob, action)
 
             # Compute loss (JSD) and scores
-            # with profile_to_file(f"profile_vsa_backend_loss.txt"):
             loss, scores, xe_loss_item = env.loss(action[0], action_logprob, pred, scene_prob, targets, criteria.JSD)
 
             xe_loss_avg.update(loss.item(),images.size(0))
             acc = criteria.calculate_acc(scores, targets)
             acc_avg.update(acc.item(),images.size(0))
+
+        # trace_path = session.end_profiling()
+        # print("ORT trace saved to:", trace_path)
 
         # Save final result as npz (and potentially in Tensorboard) 
         if not (writer is None):  
@@ -315,7 +301,14 @@ def test(args, env, device, perception_cb, writer = None, dset="RAVEN"):
         print("=> loaded checkpoint '{}' with acc {:.3f}".format(model_path,checkpoint["best_acc"]))
     else:
         raise ValueError("No checkpoint found at {:}".format(model_path)) 
-   
+    
+    # Load the model and create InferenceSession
+    # model_path_onxx = os.path.join(args.resume,"ResNet18.onnx")
+    # sess_options = ort.SessionOptions()
+    # sess_options.enable_profiling = True
+    # sess_options.profile_file_prefix = "onnx_profile"
+    # session = ort.InferenceSession(model_path_onxx, sess_options=sess_options, providers=["CPUExecutionProvider", "CUDAExecutionProvider"])
+
     # Load ResNet18 model  
     model = resnet18(pretrained = args.pretrained, progress = True, num_classes=args.d, no_maxpool=args.no_maxpool)
     model.to(device)
@@ -353,7 +346,7 @@ def main():
 
     # Training hyperparameters
     arg_parser.add_argument("--epochs", type=int, default=100, help="the number of training epochs")
-    arg_parser.add_argument("--batch-size", type=int, default=2, help="size of batch")
+    arg_parser.add_argument("--batch-size", type=int, default=1, help="size of batch")
     arg_parser.add_argument("--device", type=int, default=0, help="device index for GPU; if GPU unavailable, leave it as default")
     arg_parser.add_argument("--lr", type=float, default=0.95e-4, help="learning rate")
     arg_parser.add_argument("--weight-decay", type=float, default=5e-4, help="weight decay of optimizer, same as l2 reg")
