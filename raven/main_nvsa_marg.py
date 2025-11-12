@@ -27,13 +27,17 @@ from nvsa.perception.metrics import  hd_mult_frontend, generate_IM
 from nvsa.reasoning.vsa_block_utils import block_discrete_codebook, block_continuous_codebook
 
 # Profiling tools
-import cProfile, pstats, io
+import cProfile, pstats, io, time
 from contextlib import contextmanager
-import onnxruntime as ort
+from torch.profiler import profile, record_function, ProfilerActivity, ExecutionTraceObserver
+import torch.cuda.nvtx as nvtx
 
 @contextmanager
 def profile_to_file(path):
-    pr = cProfile.Profile()
+    # pr = cProfile.Profile() 
+    pr = cProfile.Profile(timer=lambda: time.perf_counter() * 1e3) 
+    # Prints time in ms
+    # pr = cProfile.Profile(time.perf_counter, timeunit=1e-6)
     pr.enable()
     try:
         yield
@@ -54,6 +58,16 @@ def generate_nvsa_codebooks(args,rng,device):
     if os.path.isfile(imfilename):
         print("Load predefined NVSA codebooks")  
         data= torch.load(imfilename, map_location='cpu')
+
+        # perception_cb = data["perception_cb"].to(torch.int8)
+        # perception_imdict = data["perception_imdict"].to(torch.int8)
+        # if(device == torch.device("cpu")):
+        #     backend_cb_cont = data['backend_cb_cont'].to(torch.int8)
+        #     backend_cb_discrete = data['backend_cb_discrete'].to(torch.int8)
+        # else:
+        #     backend_cb_cont = data['backend_cb_cont'].to(args.device).to(torch.int8)
+        #     backend_cb_discrete = data['backend_cb_discrete'].to(args.device).to(torch.int8)
+
         perception_cb = data["perception_cb"]
         perception_imdict = data["perception_imdict"]
         if(device == torch.device("cpu")):
@@ -224,64 +238,44 @@ def test(args, env, device, perception_cb, writer = None, dset="RAVEN"):
         model.eval()
         xe_loss_avg = AverageMeter('XE Loss', ':.3f')
         acc_avg = AverageMeter('Acccuracy', ':.3f')
+        
         for counter, (images, targets, all_action_rule) in enumerate(tqdm(test_loader)):
-
-            if(counter >= 1):
-                break
-
+            
+            # Pass images through Image
             images, targets = images.to(device), targets.to(device)
             [B,N,_, H,W] = images.shape
 
-            # Pass images through ResNet18
-            model_output = model(images.view(B*N,1,H,W))
+            # with resnetProf:
+            with record_function("./tb_logs/ResNet18"):
+                # Pass images through ResNet18
+                model_output = model(images.view(B*N,1,H,W))
+                # resnetProf.step()
 
-            # Run inference
-            # input_onnx = images.view(B*N,1,H,W).detach().cpu().numpy().astype(np.float32)
-            # outputs = session.run(None, {"input": input_onnx})
+            # with vsaFrontProf:
+            with record_function("./tb_logs/VSA_frontend"):
+                # Compare query with codebook and compute probabilities
+                marg_prob = metric_fc(model_output,B,N)
+                # vsaFrontProf.step()
 
-            # torch.onnx.export(
-            #     model,                  # model to export
-            #     images.view(B*N,1,H,W),        # inputs of the model,
-            #     "ResNet18.onnx",        # filename of the ONNX model
-            #     input_names=["input"],  # Rename inputs for the ONNX model
-            #     dynamo=True,             # True or False to select the exporter to use
-            #     do_constant_folding=False,
-            #     profile=False,
-            #     optimize=True
-            # )
+            # with vsaBackProf:
+            with record_function("./tb_logs/VSA_backend"):
+                # Infer the scene probabilities
+                scene_prob, scene_logprob = env.prepare(marg_prob)
 
-            # Compare query with codebook and compute probabilities
-            marg_prob = metric_fc(model_output,B,N)
+                # Rule probability computation 
+                action, action_logprob, all_action_prob = env.action(scene_logprob, sample=False)
 
-            # torch.onnx.export(
-            #     metric_fc,                  # model to export
-            #     (model_output,B,N,),        # inputs of the model,
-            #     "NVSA_frontend.onnx",        # filename of the ONNX model
-            #     input_names=["input"],  # Rename inputs for the ONNX model
-            #     dynamo=True,             # True or False to select the exporter to use
-            #     do_constant_folding=False,
-            #     profile=False,
-            #     optimize=True
-            # )
+                # Rule execution
+                pred = env.step(scene_prob, action)
 
-            # Infer the scene probabilities
-            scene_prob, scene_logprob = env.prepare(marg_prob)
-
-            # Rule probability computation 
-            action, action_logprob, all_action_prob = env.action(scene_logprob, sample=False)
-
-            # Rule execution
-            pred = env.step(scene_prob, action)
-
-            # Compute loss (JSD) and scores
-            loss, scores, xe_loss_item = env.loss(action[0], action_logprob, pred, scene_prob, targets, criteria.JSD)
-
+                # Compute loss (JSD) and scores
+                loss, scores, xe_loss_item = env.loss(action[0], action_logprob, pred, scene_prob, targets, criteria.JSD)
+                # vsaBackProf.step()
+            mainProf.step()
+        
             xe_loss_avg.update(loss.item(),images.size(0))
             acc = criteria.calculate_acc(scores, targets)
             acc_avg.update(acc.item(),images.size(0))
-
-        # trace_path = session.end_profiling()
-        # print("ORT trace saved to:", trace_path)
 
         # Save final result as npz (and potentially in Tensorboard) 
         if not (writer is None):  
@@ -324,8 +318,53 @@ def test(args, env, device, perception_cb, writer = None, dset="RAVEN"):
     test_loader = DataLoader(test_set, batch_size=args.batch_size, num_workers=args.num_workers)
 
     print("Evaluating on {}".format(args.config))
-    # with torch.no_grad():
-    test_epoch()
+
+    waitSteps   = 900
+    warmupSteps = 40
+    activeSteps = 10
+    repeatSteps = 1
+    mainProf = profile(    activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA] if torch.cuda.is_available() else [ProfilerActivity.CPU],
+                            on_trace_ready=torch.profiler.tensorboard_trace_handler("./tb_long_run_logs"),
+                            schedule=torch.profiler.schedule(wait=waitSteps, warmup=warmupSteps, active=activeSteps, repeat=repeatSteps),
+                            execution_trace_observer=(ExecutionTraceObserver().register_callback("./tb_long_run_logs/execution_trace.json")),
+                            with_stack=True,            # capture Python callstacks for ops
+                            with_modules=True,          # map ops back to nn.Module hierarchy (enables Module view)
+                            record_shapes=True,         # show input shapes per op
+                            profile_memory=True,        # CPU/CUDA memory per op
+                            acc_events = True)
+    # resnetProf = profile(    activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA] if torch.cuda.is_available() else [ProfilerActivity.CPU],
+    #                         on_trace_ready=torch.profiler.tensorboard_trace_handler("./tb_logs"),
+    #                         schedule=torch.profiler.schedule(wait=waitSteps, warmup=warmupSteps, active=activeSteps, repeat=repeatSteps),
+    #                         execution_trace_observer=(ExecutionTraceObserver().register_callback("./tb_logs/execution_trace_resnet.json")),
+    #                         with_stack=True,            # capture Python callstacks for ops
+    #                         with_modules=True,          # map ops back to nn.Module hierarchy (enables Module view)
+    #                         record_shapes=True,         # show input shapes per op
+    #                         profile_memory=True,        # CPU/CUDA memory per op
+    #                         acc_events = True,
+    #                     )
+    # vsaFrontProf = profile(    activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA] if torch.cuda.is_available() else [ProfilerActivity.CPU],
+    #                         on_trace_ready=torch.profiler.tensorboard_trace_handler("./tb_logs"),
+    #                         schedule=torch.profiler.schedule(wait=waitSteps, warmup=warmupSteps, active=activeSteps, repeat=repeatSteps),
+    #                         execution_trace_observer=(ExecutionTraceObserver().register_callback("./tb_logs/execution_trace_vsafront.json")),
+    #                         with_stack=True,            # capture Python callstacks for ops
+    #                         with_modules=True,          # map ops back to nn.Module hierarchy (enables Module view)
+    #                         record_shapes=True,         # show input shapes per op
+    #                         profile_memory=True,        # CPU/CUDA memory per op
+    #                         acc_events = True,
+    #                     )
+    # vsaBackProf = profile(    activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA] if torch.cuda.is_available() else [ProfilerActivity.CPU],
+    #                         on_trace_ready=torch.profiler.tensorboard_trace_handler("./tb_logs"),
+    #                         schedule=torch.profiler.schedule(wait=waitSteps, warmup=warmupSteps, active=activeSteps, repeat=repeatSteps),
+    #                         execution_trace_observer=(ExecutionTraceObserver().register_callback("./tb_logs/execution_trace_vsaBack.json")),
+    #                         with_stack=True,            # capture Python callstacks for ops
+    #                         with_modules=True,          # map ops back to nn.Module hierarchy (enables Module view)
+    #                         record_shapes=True,         # show input shapes per op
+    #                         profile_memory=True,        # CPU/CUDA memory per op
+    #                         acc_events = True,
+    #                     )
+    with mainProf:
+        with torch.no_grad():
+            test_epoch()
     return writer
 
 def main(): 
