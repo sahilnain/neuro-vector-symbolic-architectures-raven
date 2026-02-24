@@ -22,18 +22,6 @@ CHKPOINTPATH="$HOME/Thesis/neuro-vector-symbolic-architectures-raven/Checkpoint_
 
 mkdir -p "$EXPPATH"
 
-# run_job () {
-#   local NAME="$1"; shift
-#   echo "=== Running: $NAME ==="
-#   python -m cProfile -s cumtime raven/main_nvsa_marg.py "$@" \
-#     --exp_dir "$EXPPATH" \
-#     --dataset "$DATAPATH" \
-#     --dataset-i-raven "$DATAPATHIRAVEN" \
-#     --seed "$SEED" \
-#     --run "$RUN" \
-#     --resume "$CHKPOINTPATH" >> nvsa_profile_gpu.txt
-# }
-
 run_job () {
   local NAME="$1"; shift
   echo "=== Running: $NAME ==="
@@ -48,37 +36,86 @@ run_job () {
 
 # run_job () {
 #   local NAME="$1"; shift
+#   echo "=== Running: $NAME ==="
+#   python -m cProfile -s cumtime raven/main_nvsa_marg.py "$@" \
+#     --exp_dir "$EXPPATH" \
+#     --dataset "$DATAPATH" \
+#     --dataset-i-raven "$DATAPATHIRAVEN" \
+#     --seed "$SEED" \
+#     --run "$RUN" \
+#     --resume "$CHKPOINTPATH" >> nvsa_profile_gpu.txt
+# }
+
+# run_job () {
+#   local NAME="$1"; shift
 #   echo "=== Running under Nsight Systems: $NAME ==="
 
-#   # Create an output directory for Nsight traces if it doesn’t exist
-#   mkdir -p "$HOME/Thesis/neuro-vector-symbolic-architectures-raven/nsys_traces"
-
-#   # Choose output trace file name
-#   local TRACE_OUT="$HOME/Thesis/neuro-vector-symbolic-architectures-raven/nsys_traces/${NAME}_trace"
-
 #   # Run under Nsight Systems
-#   nsys profile \
-#     -w true \
-#     --trace=cuda,nvtx,osrt,cudnn,cublas \
-#     --sample=process-tree \
-#     --cuda-memory-usage=true \
-#     --force-overwrite=true \
-#     --cudabacktrace=true --osrt-threshold=10000 -x true \
-#     --output="$TRACE_OUT" \
-#     python raven/main_nvsa_marg.py "$@" \
+#   /usr/local/cuda-12.5/bin/ncu --target-processes all \
+#     --set roofline \
+#     --nvtx --nvtx-include "NVSA_VSA_backend/" \
+#     --replay-mode application \
+#     -f \
+#     -o "$HOME/Thesis/neuro-vector-symbolic-architectures-raven/nvsa_profile_backend_roofline" \
+#     /home/sahil/Thesis/.venv/bin/python raven/main_nvsa_marg.py "$@" \
 #       --exp_dir "$EXPPATH" \
 #       --dataset "$DATAPATH" \
 #       --dataset-i-raven "$DATAPATHIRAVEN" \
 #       --seed "$SEED" \
 #       --run "$RUN" \
 #       --resume "$CHKPOINTPATH"
-      
-#   echo "Trace saved to ${TRACE_OUT}.qdrep"
 # }
 
 # Center
 run_job center_single \
   --mode test --config center_single --epochs 50 --s 7 --trainable-s
+
+
+# run_job_1 () {
+#   local NAME="$1"; shift
+#   echo "=== Running under Nsight Systems: $NAME ==="
+
+#   # Run under Nsight Systems
+#   /usr/local/cuda-12.5/bin/ncu -f --target-processes all \
+#     --set roofline \
+#     --nvtx --nvtx-include "NVSA_VSA_frontend/" \
+#     --replay-mode application \
+#     -o "$HOME/Thesis/neuro-vector-symbolic-architectures-raven/nvsa_profile_frontend_roofline" \
+#     /home/sahil/Thesis/.venv/bin/python raven/main_nvsa_marg.py "$@" \
+#       --exp_dir "$EXPPATH" \
+#       --dataset "$DATAPATH" \
+#       --dataset-i-raven "$DATAPATHIRAVEN" \
+#       --seed "$SEED" \
+#       --run "$RUN" \
+#       --resume "$CHKPOINTPATH"
+# }
+
+# Center
+# run_job_1 center_single \
+#   --mode test --config center_single --epochs 50 --s 7 --trainable-s
+
+# run_job_2 () {
+#   local NAME="$1"; shift
+#   echo "=== Running under Nsight Systems: $NAME ==="
+
+#   # Run under Nsight Systems
+#   /usr/local/cuda-12.5/bin/ncu -f --target-processes all \
+#     --set roofline \
+#     --nvtx --nvtx-include "NVSA_ResNet18/" \
+#     --replay-mode application \
+#     -o "$HOME/Thesis/neuro-vector-symbolic-architectures-raven/nvsa_profile_resnet_roofline" \
+#     /home/sahil/Thesis/.venv/bin/python raven/main_nvsa_marg.py "$@" \
+#       --exp_dir "$EXPPATH" \
+#       --dataset "$DATAPATH" \
+#       --dataset-i-raven "$DATAPATHIRAVEN" \
+#       --seed "$SEED" \
+#       --run "$RUN" \
+#       --resume "$CHKPOINTPATH"
+# }
+
+# # Center
+# run_job_2 center_single \
+#   --mode test --config center_single --epochs 50 --s 7 --trainable-s
 
 # # 2x2
 # run_job distribute_four \
